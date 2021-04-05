@@ -1,8 +1,89 @@
 import os
+import re
 import json
-
+import time
 import requests
+from urllib.parse import urljoin
+
 from bs4 import BeautifulSoup
+from bs4.element import Comment
+
+class Crawler:
+    """
+    Crawl a specified website and capture text.
+    """
+    def __init__(self):
+        self.visited = {}
+        self.frontier = set()
+
+        self.crawl_delay = 5
+        self.save_frequency = 5
+
+    def crawl(self, index, initial_frontier, crawl_url, save_path):
+        """
+        Adds words to index by crawling an initial frontier.
+        """
+        if not len(initial_frontier):
+            raise ValueError("Initial frontier empty. Please specify a starting point.")
+        for url in initial_frontier:
+            self.frontier.add(url)
+
+        step = 0
+        while len(self.frontier):
+            url = self.frontier.pop()
+            print(f"Crawling {url}, Pending {len(self.frontier)}...")
+
+            html = requests.get(url).text
+            soup = BeautifulSoup(html, "html.parser")
+
+            page_id = index.insert_page(url)
+            self.visited[url] = page_id
+
+            for word in self.extract_text(soup):
+                index.insert_word(word, page_id)
+            links = self.extract_links(soup, crawl_url)
+            for link in links:
+                self.frontier.add(link)
+
+            if step % self.save_frequency == 0:
+                index.save_to_file(save_path)
+            step += 1
+            time.sleep(self.crawl_delay)
+
+    def visible_text_tags(self, token):
+        """
+        Only capture text visible to the user.
+        """
+        hidden_tags = ["[document]", "script", "style", "title", "head", "meta"]
+        if token.parent.name in hidden_tags:
+            return False
+        if isinstance(token, Comment):
+            return False
+        return True
+
+    def extract_text(self, soup):
+        """
+        Get visible text on page and split into words.
+        """
+        raw_text = soup.findAll(text=True)
+        raw_text = filter(self.visible_text_tags, raw_text)
+        for token in raw_text:
+            token = re.sub("[^a-zA-Z\n]+", " ", token).strip()
+            if token == "":
+               continue
+            yield from token.split(" ")
+
+    def extract_links(self, soup, crawl_url):
+        """
+        Extract links on the site and ensure they are absolute.
+        """
+        for link in soup.findAll("a"):
+            url = link.get("href")
+            url = urljoin(crawl_url, url)
+            if url in self.visited:
+                continue
+            yield url
+        
 
 class InvertedIndex:
     """
@@ -78,20 +159,10 @@ class SearchTool:
     """
     def __init__(self):
         self.s = requests.Session()
-        self.scrape_url = "http://example.python-scraping.com/"
+        self.initial_url = "http://example.python-scraping.com/"
         self.relative_save_path = "./crawled_index.json"
-        self.index = InvertedIndex()
-        idx = self.index.insert_page("test")
-        idx2 = self.index.insert_page("test1")
-        idx3 = self.index.insert_page("test2")
-        idx4 = self.index.insert_page("test3")
-        self.index.insert_word("fish", idx)
-        self.index.insert_word("fish", idx2)
-        self.index.insert_word("fish", idx3)
-        self.index.insert_word("fish", idx4)
-        self.index.insert_word("cod", idx2)
-        self.index.insert_word("parana", idx)
-        self.index.insert_word("place", idx3)
+        self.index = None
+        self.crawler = Crawler()
 
     def build_index(self):
         """
@@ -104,12 +175,10 @@ class SearchTool:
                 return
 
         self.index = InvertedIndex()
-
-        html = requests.get(self.scrape_url).text
-        soup = BeautifulSoup(html, "html.parser")
-
-        print(soup)
-
+        self.crawler.crawl(self.index, 
+                           [self.initial_url], 
+                           self.initial_url, 
+                           self.relative_save_path)
         self.index.save_to_file(self.relative_save_path)
 
     def load_index(self):
@@ -163,14 +232,14 @@ class SearchTool:
             return
 
         print(f"Results for query: '{query_string}'")
-        print("Page: ", end="")
+        print("Page:")
         
         for i, page_id in enumerate(pages):
             page_string = self.index.id_to_page[page_id]
             if i < len(pages) - 1:
-                print(f"{page_string}, ", end="")
+                print(f"\t{page_string},")
             else:
-                print(page_string)
+                print(f"\t{page_string}")
 
     def help(self):
         """
