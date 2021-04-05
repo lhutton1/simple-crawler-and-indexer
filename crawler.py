@@ -19,7 +19,7 @@ class Crawler:
         self.crawl_delay = 5
         self.save_frequency = 5
 
-    def crawl(self, index, initial_frontier, crawl_url, save_path):
+    def crawl(self, index, initial_frontier, root_url, save_path):
         """
         Adds words to index by crawling an initial frontier.
         """
@@ -41,7 +41,7 @@ class Crawler:
 
             for word in self.extract_text(soup):
                 index.insert_word(word, page_id)
-            links = self.extract_links(soup, crawl_url)
+            links = self.extract_links(soup, root_url)
             for link in links:
                 self.frontier.add(link)
 
@@ -164,7 +164,7 @@ class SearchTool:
         self.index = None
         self.crawler = Crawler()
 
-    def build_index(self):
+    def build_index(self, crawl_url, save_path):
         """
         Crawl a webpage and create index.
         """
@@ -176,12 +176,12 @@ class SearchTool:
 
         self.index = InvertedIndex()
         self.crawler.crawl(self.index, 
-                           [self.initial_url], 
-                           self.initial_url, 
-                           self.relative_save_path)
-        self.index.save_to_file(self.relative_save_path)
+                           [crawl_url], 
+                           crawl_url, 
+                           save_path)
+        self.index.save_to_file(save_path)
 
-    def load_index(self):
+    def load_index(self, path):
         """
         Load an index from file.
         """
@@ -192,10 +192,10 @@ class SearchTool:
                 return
 
         try:
-            self.index = InvertedIndex.load_from_file(self.relative_save_path)
+            self.index = InvertedIndex.load_from_file(path)
             print("Successfully loaded index!")
         except FileNotFoundError:
-            print(f"No index found in file system at {self.relative_save_path}. Has an index been built?")
+            print(f"No index found in file system at {path}. Has an index been built?")
 
     def print_index(self, word):
         """
@@ -247,14 +247,14 @@ class SearchTool:
         """
         print("\nBuilding a search tool.")
         print("Enter the desired command followed by any arguments.")
-        print("----------------------------------------------------------------")
-        print("> build\t\tcrawl the website and build index")
-        print("> load\t\tload the index from file system")
-        print("> print <word>\tprint the inverted index for a particular word")
-        print("> find <phrase>\tfind a query in the index")
-        print("> help\t\tdisplay list of commands")
-        print("> exit\t\tstop the tool")
-        print("----------------------------------------------------------------")
+        print("----------------------------------------------------------------------------------------------")
+        print("> build <optional: crawl url, save path>\tcrawl the website and build index")
+        print("> load \t<optional: load path>\t\t\tload the index from file system")
+        print("> print <word>\t\t\t\t\tprint the inverted index for a particular word")
+        print("> find \t<phrase>\t\t\t\tfind a query in the index")
+        print("> help\t\t\t\t\t\tdisplay list of commands")
+        print("> exit\t\t\t\t\t\tstop the tool")
+        print("----------------------------------------------------------------------------------------------")
 
     def get_command(self):
         """
@@ -272,9 +272,15 @@ class SearchTool:
 
             command = input_list[0]
             if command == "build":
-                self.build_index()
+                crawl_url = input_list[1] if len(input_list) > 1 \
+                    else self.initial_url
+                save_path = input_list[2] if len(input_list) > 2 \
+                    else self.relative_save_path
+                self.build_index(crawl_url, save_path)
             elif command == "load":
-                self.load_index()
+                load_path = input_list[1] if len(input_list) > 1 \
+                    else self.relative_save_path
+                self.load_index(load_path)
             elif command == "print":
                 if len(input_list) != 2:
                     print("No word argument found.")
