@@ -213,14 +213,14 @@ class SearchTool:
         """
         Print the index of a single word.
         """
-        word_index = self.index.query([word])
+        word_index = list(self.index.query([word]))
 
         if not word_index:
             print("Requested word was not found in index.")
             return
 
         print(f"Results for word: {word}")
-        for page_id, count in word_index.items():
+        for page_id, count in word_index[0]:
             print(f"Page: {self.index.pages[str(page_id)][0]}, Word Count: {count}")
 
     def query_index(self, query):
@@ -246,7 +246,7 @@ class SearchTool:
         # in the query lists.
         current_offsets = [0] * len(inverted_lists)
         rank = PriorityQueue()
-        initial_page_id = min(l[0][0] for l in inverted_lists)
+        initial_page_id = min(int(l[0][0]) for l in inverted_lists)
 
         page_id = initial_page_id
         next_page_id = 0
@@ -255,20 +255,24 @@ class SearchTool:
             next_page_id = self.index.page_count
             for i, l in enumerate(inverted_lists):
                 offset = current_offsets[i]
-                word_count = 0
-                if l[offset][0] == page_id:
-                    word_count = l[offset][1]
-                    current_offsets[i] += 1
-                score += word_count
+                current_page_id = int(l[offset][0])
 
-                if len(l) > page_id + 1:
-                    n = l[page_id + 1][0]
-                    next_page_id = min(n, next_page_id)
+                if current_page_id == page_id:
+                    word_count = l[offset][1]
+                    score += word_count
+
+                    # find next smallest page id. This avoids 
+                    # needing to iterate over every page id.
+                    if current_offsets[i] + 1 < len(l):
+                        current_offsets[i] += 1
+                        current_page_id = int(l[current_offsets[i]][0])
+                        next_page_id = min(current_page_id, next_page_id)
 
             page_rank = self.index.pages[str(page_id)][1]
             score = score * page_rank
-            # use a negative score to keep maximum values at top of queue
-            rank.put((-score, page_id))
+            if score:
+                # use a negative score to keep maximum values at top of queue
+                rank.put((-score, page_id))
             page_id = next_page_id
 
         query_string = " ".join(query)
