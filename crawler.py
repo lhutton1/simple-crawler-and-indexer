@@ -4,6 +4,8 @@ import json
 import time
 import requests
 from urllib.parse import urljoin
+from collections import deque
+from queue import PriorityQueue
 
 from bs4 import BeautifulSoup
 from bs4.element import Comment
@@ -14,7 +16,7 @@ class Crawler:
     """
     def __init__(self):
         self.visited = {}
-        self.frontier = set()
+        self.frontier = deque()
 
         self.crawl_delay = 5
         self.save_frequency = 5
@@ -26,24 +28,30 @@ class Crawler:
         if not len(initial_frontier):
             raise ValueError("Initial frontier empty. Please specify a starting point.")
         for url in initial_frontier:
-            self.frontier.add(url)
+            self.visited[url] = None
+            self.frontier.append(url)
 
         step = 0
         while len(self.frontier):
-            url = self.frontier.pop()
+            url = self.frontier.popleft()
             print(f"Crawling {url}, Pending {len(self.frontier)}...")
 
             html = requests.get(url).text
             soup = BeautifulSoup(html, "html.parser")
 
-            page_id = index.insert_page(url)
+            links = list(self.extract_links(soup, root_url))
+            for link in links:
+                if link in self.visited:
+                    continue
+                self.visited[link] = None
+                self.frontier.append(link)
+
+            # score page by using the total number of links found
+            page_id = index.insert_page(url, len(links))
             self.visited[url] = page_id
 
             for word in self.extract_text(soup):
                 index.insert_word(word, page_id)
-            links = self.extract_links(soup, root_url)
-            for link in links:
-                self.frontier.add(link)
 
             if step % self.save_frequency == 0:
                 index.save_to_file(save_path)
@@ -54,7 +62,7 @@ class Crawler:
         """
         Only capture text visible to the user.
         """
-        hidden_tags = ["[document]", "script", "style", "title", "head", "meta"]
+        hidden_tags = ["[document]", "script", "style", "head", "meta"]
         if token.parent.name in hidden_tags:
             return False
         if isinstance(token, Comment):
@@ -80,20 +88,18 @@ class Crawler:
         for link in soup.findAll("a"):
             url = link.get("href")
             url = urljoin(crawl_url, url)
-            if url in self.visited:
-                continue
             yield url
         
 
 class InvertedIndex:
     """
     Create an inverted index which maintains the following data:
-    page id -> page name
-    word -> (page id -> word count)
+    page id -> page name, score
+    word -> page id, word count
     """
     def __init__(self):
         self.page_count = 0
-        self.id_to_page = {}
+        self.pages = {}
         self.index = {}
 
     @classmethod
@@ -105,7 +111,7 @@ class InvertedIndex:
             data = json.load(f)
         inv_list = cls()
         inv_list.page_count = data["meta"]["page_count"]
-        inv_list.id_to_page = data["meta"]["id_to_page"]
+        inv_list.pages = data["meta"]["pages"]
         inv_list.index = data["index"]
         return inv_list
 
@@ -116,42 +122,48 @@ class InvertedIndex:
         save_dict = {
             "meta": {
                 "page_count": self.page_count,
-                "id_to_page": self.id_to_page
+                "pages": self.pages
             },
             "index": self.index
         }
         with open(file_path, "w") as f:
             json.dump(save_dict, f)
 
-    def query(self, word):
+    def query(self, query):
         """
-        Query they inverted index.
+        Get inverted lists of words from query found in index.
         """
-        return self.index.get(word)
+        for word in query:
+            inverted_list = self.index.get(word)
+            if inverted_list:
+                yield inverted_list
 
-    def insert_page(self, page_name):
+    def insert_page(self, page_name, score=0):
         """
         Insert a page and get its ID.
         """
         idx = self.page_count
-        self.id_to_page[idx] = page_name
+        # JSON insists keys are strings.
+        self.pages[str(idx)] = [page_name, score]
         self.page_count += 1
         return idx
 
-    def insert_word(self, word, page_id, count=1):
+    def insert_word(self, word, page_id):
         """
         Insert a word into the index.
         """
-        if page_id not in self.id_to_page:
+        # JSON insists use of string values for keys
+        page_id = str(page_id)
+        if page_id not in self.pages:
             raise ValueError("Page ID not recognised, has the page been added?")
 
         if word not in self.index:
-            self.index[word] = {page_id: count}
-        elif self.index[word].get(page_id) is None:
-            self.index[word][page_id] = count
+            self.index[word] = [[page_id, 1]]
+        elif self.index[word][-1][0] == page_id:
+            self.index[word][-1][1] += 1  
         else:
-            self.index[word][page_id] += 1
-
+            self.index[word].append([page_id, 1])
+            
 
 class SearchTool:
     """
@@ -201,7 +213,7 @@ class SearchTool:
         """
         Print the index of a single word.
         """
-        word_index = self.index.query(word)
+        word_index = self.index.query([word])
 
         if not word_index:
             print("Requested word was not found in index.")
@@ -209,37 +221,66 @@ class SearchTool:
 
         print(f"Results for word: {word}")
         for page_id, count in word_index.items():
-            print(f"Page: {self.index.id_to_page[page_id]}, Word Count: {count}")
+            print(f"Page: {self.index.pages[str(page_id)][0]}, Word Count: {count}")
 
     def query_index(self, query):
         """
-        Query the index based on an input phrase.
+        Query the index based on an input phrase using
+        document-at-a-time retrieval with some optimisation.
+
+        Ranking is based on: sum_i(g_i * f_i),
+        where f is the ranking of the page and g is the value of 
+        the query token on the ith token.
+
+        In this case:
+            f = number of links (<a> tags) on the page
+            g = number of the word in ith token on the page
         """
-        pages = set()
-
-        for word in query:
-            result = self.index.query(word)
-            if not result:
-                continue
-            if len(pages) == 0:
-                pages = result.keys()
-            pages = pages & self.index.query(word).keys()
-
-        query_string = " ".join(query)
-
-        if len(pages) == 0:
+        inverted_lists = list(self.index.query(query))
+        if len(inverted_lists) == 0:
             print("No results to show. Please check your query.")
             return
 
+        # rather than iterate over all documents,
+        # iterate over only the documents that are
+        # in the query lists.
+        current_offsets = [0] * len(inverted_lists)
+        rank = PriorityQueue()
+        initial_page_id = min(l[0][0] for l in inverted_lists)
+
+        page_id = initial_page_id
+        next_page_id = 0
+        while next_page_id < self.index.page_count:
+            score = 0
+            next_page_id = self.index.page_count
+            for i, l in enumerate(inverted_lists):
+                offset = current_offsets[i]
+                word_count = 0
+                if l[offset][0] == page_id:
+                    word_count = l[offset][1]
+                    current_offsets[i] += 1
+                score += word_count
+
+                if len(l) > page_id + 1:
+                    n = l[page_id + 1][0]
+                    next_page_id = min(n, next_page_id)
+
+            page_rank = self.index.pages[str(page_id)][1]
+            score = score * page_rank
+            # use a negative score to keep maximum values at top of queue
+            rank.put((-score, page_id))
+            page_id = next_page_id
+
+        query_string = " ".join(query)
         print(f"Results for query: '{query_string}'")
-        print("Page:")
         
-        for i, page_id in enumerate(pages):
-            page_string = self.index.id_to_page[page_id]
-            if i < len(pages) - 1:
-                print(f"\t{page_string},")
-            else:
-                print(f"\t{page_string}")
+        count = 0
+        while not rank.empty():
+            score, page_id = rank.get()
+            page_string = self.index.pages[str(page_id)][0]
+            count += 1
+            # remember we used negative score so invert back
+            print(f"{count}. {page_string}, rank: {-score}")
 
     def help(self):
         """
