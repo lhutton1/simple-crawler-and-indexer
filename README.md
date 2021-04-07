@@ -10,12 +10,12 @@ python -m pip install -r requirements.txt
 Now the tool can be started. If the tool complains about certain packages not being installed, the previous step was not completed correctly.
 
 ```bash
-Python crawler.py
+python crawler.py
 ```
 
 You will be presented with a menu. Type the command you wish to execute followed by any arguments. For example:
 
-```python
+```
 >>> print Kingdom
 Results for word: Kingdom
 Page: http://example.python-scraping.com/places/default/continent/EU, Word Count: 1
