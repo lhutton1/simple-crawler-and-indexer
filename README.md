@@ -1,3 +1,6 @@
+# Simple web crawler and search engine
+Web services and web data coursework for crawling [example.python-scraping.com](http://example.python-scraping.com). This tool extracts data on the site by crawling it and builds an inverted index. This can then be used to search by phrase and display relevant pages. 
+
 # Usage
 First the virtual environment should be built and the requirements in ‘requirements.txt’ should be installed. Execute the following commands in the project directory.
 
