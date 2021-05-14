@@ -29,7 +29,8 @@ Page: http://example.python-scraping.com/places/default/index/23, Word Count: 1
 
 Or searching for a query:
 ```
->>> Results for query: 'Example'
+>>> find Example
+Results for query: 'Example'
 1. http://example.python-scraping.com/places/default/continent/AF, rank: 126
 2. http://example.python-scraping.com/places/default/continent/EU, rank: 118
 3. http://example.python-scraping.com/places/default/continent/AS, rank: 102
